@@ -1,11 +1,10 @@
 import numpy as np
 import rasterio
+import xarray as xr
 from rasterio.crs import CRS
 from rasterio.errors import CRSError
-from rasterio.io import DatasetReader
 from rasterio.transform import AffineTransformer
 from rasterio.windows import from_bounds
-from tqdm import tqdm
 
 
 def write_tiff(
@@ -46,8 +45,8 @@ def write_tiff(
 
 
 def raster_transform(
-    source: DatasetReader,
-    destination: DatasetReader,
+    source: rasterio.io.DatasetReader,
+    destination: rasterio.io.DatasetReader,
     output_path: str = None,
     resampling: int = 5,
     epsg: int = 28992,
@@ -57,8 +56,8 @@ def raster_transform(
     Output is saved at output_path. Resampling options from rasterio are available.
 
     Args:
-        source (Rasterio.io.DatasetReader): source raster from which data is extracted.
-        destination (Rasterio.io.DatasetReader): destination raster to which's shape the new raster conforms.
+        source (rasterio.io.DatasetReader): source raster from which data is extracted.
+        destination (asterio.io.DatasetReader): destination raster to which's shape the new raster conforms.
         output_path (str): location to save the output raster. Default None will result in no files being saved to disk
         resampling (int): rasterio resampling options (default: 5 = average). Other options are:
                 nearest = 0,
@@ -79,7 +78,7 @@ def raster_transform(
         epsg (int): coordinate reference system. Default is Dutch RDS.
 
     Returns:
-        s_data (np.ndarray): transformed raster in numpy format
+        s_data (xr.DataArray): transformed raster in Xarray DataArray format
     """
     # Read Rasterio transforms from both source and destination rasters
     s_transform = source.transform
@@ -103,13 +102,33 @@ def raster_transform(
         out_shape=(1, d_data.shape[0], d_data.shape[1]), window=window, resampling=resampling
     )[0, :, :]
 
-    if output_path is not None:
-        # write tiff
-        write_tiff(
-            output_file_path=output_path,
-            new_grid_data=s_data,
-            transform=d_transform,
-            epsg=epsg,
-        )
+    xs, _ = rasterio.transform.xy(
+        transform=d_transform, rows=0, cols=np.arange(d_data.shape[1]), offset="center"
+    )
+    _, ys = rasterio.transform.xy(
+        transform=d_transform, rows=np.arange(d_data.shape[0]), cols=0, offset="center"
+    )
 
-    return s_data
+    # store data in DataArray
+    s_data_da = xr.DataArray(
+        data=s_data,
+        dims=["y", "x"],
+        coords={"x": xs, "y": ys},
+    )
+
+    # If output path is given, save data to disk
+    if output_path is not None:
+        if (".tif" in output_path.lower()) or (".tiff" in output_path.lower()):
+            # write tiff
+            write_tiff(
+                output_file_path=output_path,
+                new_grid_data=s_data,
+                transform=d_transform,
+                epsg=epsg,
+            )
+        elif ".nc" in output_path.lower():
+            s_data_da.to_netcdf(path=output_path, mode="w", format="NETCDF4")
+        else:
+            raise NameError("File not supported")
+
+    return s_data_da
