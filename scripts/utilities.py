@@ -48,7 +48,7 @@ def write_tiff(
 def raster_transform(
     source: DatasetReader,
     destination: DatasetReader,
-    output_path: str,
+    output_path: str = None,
     resampling: int = 5,
     epsg: int = 28992,
 ) -> None:
@@ -59,7 +59,7 @@ def raster_transform(
     Args:
         source (Rasterio.io.DatasetReader): source raster from which data is extracted.
         destination (Rasterio.io.DatasetReader): destination raster to which's shape the new raster conforms.
-        output_path (str): location to save the output raster
+        output_path (str): location to save the output raster. Default None will result in no files being saved to disk
         resampling (int): rasterio resampling options (default: 5 = average). Other options are:
                 nearest = 0,
                 bilinear = 1
@@ -79,7 +79,7 @@ def raster_transform(
         epsg (int): coordinate reference system. Default is Dutch RDS.
 
     Returns:
-        None
+        s_data (np.ndarray): transformed raster in numpy format
     """
     # Read Rasterio transforms from both source and destination rasters
     s_transform = source.transform
@@ -89,30 +89,27 @@ def raster_transform(
     d_data = destination.read(1)
     s_data = np.zeros(d_data.shape)
 
-    # Loop over pixels in the destination data shape, to fill source data array with new data
-    for m in tqdm(np.arange(d_data.shape[0])):
-        for n in np.arange(d_data.shape[1]):
-
-            # Obtain coordinate boundary of the pixel (upper left and lower right bounds)
-            ul_x, ul_y = rasterio.transform.xy(transform=d_transform, rows=m, cols=n, offset="ul")
-            lr_x, lr_y = rasterio.transform.xy(transform=d_transform, rows=m, cols=n, offset="lr")
-
-            # Create a Rasterio window from pixel bounds and source_transform
-            window = from_bounds(
-                left=ul_x, top=ul_y, right=lr_x, bottom=lr_y, transform=s_transform
-            )
-            # Read source data within window and resample
-            s_pixel = source.read(
-                out_shape=(1, 1, 1), window=window, resampling=resampling
-            ).flatten()
-
-            # Fill source data pixel
-            s_data[m, n] = s_pixel
-
-    # write tiff
-    write_tiff(
-        output_file_path=output_path,
-        new_grid_data=s_data,
-        transform=d_transform,
-        epsg=epsg,
+    # Obtain coordinate boundary of the pixel (upper left and lower right bounds)
+    ul_x, ul_y = rasterio.transform.xy(transform=d_transform, rows=0, cols=0, offset="ul")
+    lr_x, lr_y = rasterio.transform.xy(
+        transform=d_transform, rows=d_data.shape[0], cols=d_data.shape[1], offset="lr"
     )
+
+    # Create a Rasterio window from pixel bounds and source_transform
+    window = from_bounds(left=ul_x, top=ul_y, right=lr_x, bottom=lr_y, transform=s_transform)
+
+    # Read source data within window and resample
+    s_data = source.read(
+        out_shape=(1, d_data.shape[0], d_data.shape[1]), window=window, resampling=resampling
+    )[0, :, :]
+
+    if output_path is not None:
+        # write tiff
+        write_tiff(
+            output_file_path=output_path,
+            new_grid_data=s_data,
+            transform=d_transform,
+            epsg=epsg,
+        )
+
+    return s_data
