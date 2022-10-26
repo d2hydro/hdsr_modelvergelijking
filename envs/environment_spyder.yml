@@ -1,0 +1,12 @@
+name: wflow
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+    - geopandas
+    - jupyter
+    - NetCDF4
+    - pcraster
+    - rasterio
+    - spyder
+    - xarray
