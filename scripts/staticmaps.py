@@ -54,6 +54,7 @@ class Reporter:
     transform: rasterio.Affine
     width: int
     height: int
+    layers: int = 3
     crs: int = 28992
     xs: list = None
     ys: list = None
@@ -71,8 +72,9 @@ class Reporter:
         _, self.ys = rasterio.transform.xy(
             transform=self.transform, rows=np.arange(self.height), cols=0, offset="center"
         )
+        layer = [i for i in range(self.layers)]
         self.ds = xr.Dataset(
-            coords={"x": self.xs, "y": self.ys},
+            coords={"x": self.xs, "y": self.ys, "layer": layer},
         )
 
     def report(self, data, name):
@@ -102,7 +104,10 @@ class Reporter:
             dst.write(data, 1)
 
         # add to xr dataset
-        self.ds[name]=(['y', 'x'], data)
+        self.add_to_ds(['y', 'x'], data, name)
+
+    def add_to_ds(self, dims, data, name):
+        self.ds[name]=(dims, data)
 
     def write_netcdf(self, nc_file):
         if self.ds is not None:
@@ -136,7 +141,8 @@ reporter = Reporter(tif_dir=static_tifs,
 
 # %% write model_dem as WFlow_dem
 print("prepare wflow_dem")
-dem_data = clip_on_shape(dem_source.read(1), catchment_shape, dem_source.transform, NODATA)
+dem_data = dem_source.read(1)
+clipped_dem_data = clip_on_shape(dem_source.read(1), catchment_shape, dem_source.transform, NODATA)
 reporter.report(dem_data, "wflow_dem")
 pcr.setclone(str(static_maps / "wflow_dem.map"))
 
@@ -188,7 +194,7 @@ reporter.report(outlet_data, "outlet")
 
 # %% prepare ldd
 print("prepare wflow_ldd")
-ldd_dem_data = np.where(river_data == 1, dem_data - BURN_DEPTH, dem_data)
+ldd_dem_data = np.where(river_data == 1, clipped_dem_data - BURN_DEPTH, clipped_dem_data)
 ldd_dem_data = np.where(outlet_data == 1, ldd_dem_data - BURN_DEPTH, ldd_dem_data)
 profile["dtype"] = ldd_dem_data.dtype
 with rasterio.open(static_tifs / "wflow_dem_burned.tif", "w", **profile) as dst:
@@ -211,6 +217,16 @@ outlet_map = array_to_map(outlet_data, NODATA)
 catchment_map = pcr.catchment(ldd_map, outlet_map)
 reporter.report(catchment_map, "wflow_subcatch")
 
+
+# %% add missing layers in manual with defaults
+print("write defaults")
+reporter.report(np.full(dem_data.shape, 0.25)  , "k")
+reporter.report(np.full(dem_data.shape, 0.2)  , "specific_yield")
+
+conductance_data = river_data * 200
+reporter.report(conductance_data, "infiltration_conductance")
+reporter.report(conductance_data, "exfiltration_conductance")
+reporter.report(dem_data - 0.5, "river_bottom")
 
 # %% write netcdf
 print("write NetCDF")
