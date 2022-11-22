@@ -1,3 +1,7 @@
 
 *.pyc
 .ipynb_checkpoints*
+*.pickle
+*.nc
+*.tif
+*.gpkg

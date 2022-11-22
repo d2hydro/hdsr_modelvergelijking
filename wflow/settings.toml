@@ -1,0 +1,76 @@
+#casename = "Amerongse Wettering"
+
+# time settings inferred from forcing
+endtime = 2014-01-31T00:00:00 
+
+[state]
+# path_output = "output/outstates-example-sbm-gwfv4_10.nc"
+
+
+[input]
+path_forcing = "input/meteo.nc"
+path_static = "input/staticmaps.nc"
+
+silent = false          # optional, default is "false"
+loglevel = "debug"      # optional, default is "info"
+path_log = "output/log.txt"    # optional, default is "log.txt"
+
+altitude = "wflow_dem"
+ldd = "wflow_ldd"
+river_location = "wflow_river"
+subcatchment = "wflow_subcatch"
+
+# specify the internal IDs of the parameters which vary over time
+# the external name mapping needs to be below together with the other mappings
+forcing = [
+  "vertical.precipitation",
+  "vertical.potential_evaporation",
+]
+
+[input.vertical]
+potential_evaporation = "evp" # forcing
+precipitation = "prec" # forcing
+
+[input.lateral.river]
+length = "wflow_riverlength"
+slope = "RiverSlope"
+width = "wflow_riverwidth"
+
+[input.lateral.land]
+slope = "Slope"
+
+[input.lateral.subsurface]
+conductance = "conductance"
+specific_yield = "specific_yield"
+infiltration_conductance = "infiltration_conductance"
+exfiltration_conductance = "exfiltration_conductance"
+river_bottom = "river_bottom"
+
+[model]
+type = "sbm_gwf"
+sizeinmetres = true
+snow = false
+reinit = true
+kin_wave_iteration = true
+thicknesslayers = [50,150]
+drains = false
+constanthead = false
+
+[output]
+path = "output/test.nc"
+
+[output.lateral.river]
+q = "q_river"
+h = "h_river"
+qin = "qin_river"
+qlat = "qlat_river"
+
+[output.lateral.land]
+to_river = "to_river"
+
+[output.vertical]
+actevap = "eta"
+zi = "zi"
+
+[output.lateral.subsurface.river]
+flux = "flux"
