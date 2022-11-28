@@ -369,17 +369,17 @@ reporter.report(ldd_map, "wflow_ldd")
 streamorder_map = pcr.streamorder(ldd_map)
 reporter.report(streamorder_map, "streamorder")
 
-# %% prepare wflow catchment
-print("prepare wflow_catchment")
-catchment_map = pcr.catchment(ldd_map, outlet_map)
-reporter.report(catchment_map, "wflow_subcatch")
-
 # %% snap and report gauges
 ldd_river_map = pcr.ifthen(streamorder_map > 5, pcr.nominal(1))
 gauges_map = snaptomap(pcr.ordinal(gauges_map),
                        ldd_river_map)
 reporter.report(gauges_map, "gauges")
 reporter.report(ldd_river_map, "ldd_river")
+
+# %% prepare wflow catchment
+print("prepare wflow_catchment")
+catchment_map = pcr.subcatchment(ldd_map, gauges_map)
+reporter.report(catchment_map, "wflow_subcatch")
 
 """
 ----------------------------------------------------------------------------------------
