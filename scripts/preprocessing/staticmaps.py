@@ -13,7 +13,6 @@ import shutil
 import xarray as xr
 import tempfile
 import imod
-from utilities import raster_transform
 
 # %%
 PROJECT_DIR = Path(r"d:\projecten\D2203.HDSR-modelvergelijking")
@@ -22,10 +21,25 @@ BURN_DEPTH = 10000
 RIVER_WIDTH = 5
 RIVER_SLOPE = 0.001
 NODATA = -9999.
-GAUGES = ["ST3011", "ST3010", "ST6067"]
+GAUGES = ["ST3011", "ST3010", "ST6067", "ST2002", "ST2003"]
 TEMP_DIR = tempfile.TemporaryDirectory()
 MODEL_LAYERS = [1,2,3]
 
+# input files for topology
+staticmaps_gpkg = PROJECT_DIR.joinpath(r"06.modelbouw_amerongerwetering/staticmaps.gpkg")
+input_dem = PROJECT_DIR / "06.modelbouw_amerongerwetering/ahn_25m.tif"
+
+# input files for parameters
+SIPS_DIR = PROJECT_DIR / r"03.Bronbestanden\Sips"
+wortelzone_idf =  SIPS_DIR / "wortelzonedikte.idf"
+modellagen_dir = SIPS_DIR / "modellagen_25x25m"
+kd_waarden_dir = SIPS_DIR / "kd-waarden"
+conductance_dir = SIPS_DIR / r"oppervlaktewater\winter"
+
+# output dirs
+staticmaps_nc = PROJECT_DIR / "06.modelbouw_amerongerwetering/input/staticmaps.nc"
+static_tifs = PROJECT_DIR / "06.modelbouw_amerongerwetering/statictifs"
+static_maps = PROJECT_DIR / "06.modelbouw_amerongerwetering/staticmaps"
 
 def clip_on_shape(data, shape, transform, nodata):
     nodata_mask = np.invert(rasterize((shape, 1),
@@ -266,11 +280,10 @@ class Reporter:
                               encoding=encoding,
                               format="NETCDF4")
     
-# %% read catchment shape
-print("read catchment shape")
-gdf = gpd.read_file(PROJECT_DIR / "03.Bronbestanden/Afvoergebieden/Export_Output_5.shp")
-catchment_shape = gdf.iloc[1]["geometry"]
-
+# %% read subcatchment layer
+print("prepare catchment shapes form subcatchments")
+gdf = gpd.read_file(staticmaps_gpkg, layer="subcatch")
+catchment_shape = gdf.geometry.unary_union
 
 """
 ----------------------------------------------------------------------------------------
@@ -280,14 +293,12 @@ DEM RELATED MODEL TOPOLOGY
 
 # %% get relevant properties from model DEM
 print("read model_dem")
-dem_source = rasterio.open(PROJECT_DIR / "06.modelbouw_amerongerwetering/ahn_25m.tif")
+dem_source = rasterio.open(input_dem)
 profile = dem_source.profile
+
 
 # %% set reporter
 print("set_reporter")
-static_tifs = PROJECT_DIR / "06.modelbouw_amerongerwetering/statictifs"
-static_maps = PROJECT_DIR / "06.modelbouw_amerongerwetering/staticmaps"
-
 reporter = Reporter(tif_dir=static_tifs,
                     map_dir=static_maps,
                     width=profile["width"],
@@ -303,6 +314,17 @@ clipped_dem_data = clip_on_shape(dem_source.read(1), catchment_shape, dem_source
 reporter.report(dem_data, "wflow_dem")
 pcr.setclone(str(static_maps / "wflow_dem.map"))
 
+# %%
+print("prepare initial subcatchments map")
+shapes_iter = ((i.geometry, i.WFLOW) for i in gdf.itertuples())
+subcatchment_data = rasterize(shapes_iter,
+                              out_shape=dem_data.shape,
+                              fill=0,
+                              transform=profile["transform"]
+                              ).astype(int)
+
+subcatchment_map = array_to_map(subcatchment_data, NODATA)
+
 # %% write land_slope
 print("prepare land_slope")
 pcr.setglobaloption('unittrue')
@@ -313,16 +335,14 @@ reporter.report(slope_data, "Slope")
 
 # %% generate wflow_river
 print("prepare wflow_river")
-gdf = gpd.read_file(PROJECT_DIR / "03.Bronbestanden/Watersysteem/Hydro_Objecten.geojson", bbox=(5.350, 51.952, 5.47, 52.028))
-gdf.to_crs("28992", inplace=True)
-gdf = gdf.loc[gdf.geometry.intersects(catchment_shape)]
-gdf = gdf.loc[gdf.CATEGORIEOPPWATERLICHAAM == 1]
-river_data = rasterize(((i, 1) for i in gdf.geometry),
-                        out_shape=dem_data.shape,
-                        fill=0,
-                        transform=profile["transform"]
-                        ).astype(int)
-river_map = array_to_map(river_data, NODATA) 
+gdf = gpd.read_file(staticmaps_gpkg, layer="wflow_river")
+river_data = rasterize(
+    ((i.geometry, 1) for i in gdf.itertuples()),
+    out_shape=dem_data.shape,
+    fill=0,
+    transform=profile["transform"]
+    ).astype(int)
+river_map = array_to_map(river_data, NODATA)
 reporter.report(river_data, "wflow_river")
 
 # %% prepare river width and length
@@ -335,23 +355,34 @@ reporter.report(river_width, "wflow_riverwidth")
 reporter.report(river_length, "wflow_riverlength")
 reporter.report(river_slope, "RiverSlope")
 
+# %%
+print("prepare peilbuizen")
+gdf = gpd.read_file(
+    PROJECT_DIR / r"05.onderzoek_bodemvocht_grondwaterstanden\peilbuizen.gpkg"
+    )
+shapes_iter = ((i, idx+1) for idx, i in enumerate(gdf.geometry))
+peilbuizen_data = rasterize(shapes_iter,
+                            out_shape=dem_data.shape,
+                            fill=0,
+                            transform=profile["transform"]
+                            ).astype(int)
+reporter.report(peilbuizen_data, "peilbuizen")
+
 # %% generate gauges
-print("prepare wflow_gauges")
-gdf = gpd.read_file(PROJECT_DIR / "03.Bronbestanden/Watersysteem/Stuwen.geojson")
-gdf.to_crs("28992", inplace=True)
-shapes_iter = ((gdf.set_index("CODE").at[i, "geometry"], idx+1) for idx, i in enumerate(GAUGES))
+print("prepare initial wflow_gauges")
+gdf = gpd.read_file(staticmaps_gpkg, layer="gauges")
+shapes_iter = ((i.geometry, i.WFLOW) for i in gdf.itertuples())
 gauges_data = rasterize(shapes_iter,
                         out_shape=dem_data.shape,
                         fill=0,
                         transform=profile["transform"]
                         ).astype(int)
 gauges_map = array_to_map(gauges_data, NODATA)
-
 outlet_map = pcr.ifthenelse(gauges_map == 1, pcr.nominal(1), pcr.nominal(0))
 reporter.report(outlet_map , "outlet")
 
 # %% prepare ldd
-print("prepare wflow_ldd")
+print("prepare initial ldd: to burned rivers and outlet")
 ldd_dem_data = np.where(river_data == 1, clipped_dem_data - BURN_DEPTH, clipped_dem_data)
 ldd_dem_data = np.where(gauges_data == 1, ldd_dem_data - BURN_DEPTH, ldd_dem_data)
 profile["dtype"] = ldd_dem_data.dtype
@@ -364,22 +395,63 @@ pcr.setglobaloption('lddin')
 ldd_map = pcr.lddcreate(ldd_dem_map, 1e35, 1e35, 1e35, 1e35)
 ldd_data = pcr.pcr2numpy(ldd_map, NODATA)
 
-reporter.report(ldd_map, "wflow_ldd")
+#reporter.report(ldd_map, "wflow_ldd_initial")
 
 streamorder_map = pcr.streamorder(ldd_map)
 reporter.report(streamorder_map, "streamorder")
 
 # %% snap and report gauges
-ldd_river_map = pcr.ifthen(streamorder_map > 5, pcr.nominal(1))
-gauges_map = snaptomap(pcr.ordinal(gauges_map),
-                       ldd_river_map)
+print("snap gauges to ldd-rivers (stream-oder >= 4))")
+ldd_river_map = pcr.ifthen(streamorder_map >= 4, pcr.nominal(1))
+gauges_map = pcr.cover(snaptomap(pcr.ordinal(gauges_map),
+                       ldd_river_map), 0)
 reporter.report(gauges_map, "gauges")
-reporter.report(ldd_river_map, "ldd_river")
+
+# %% ldd map
+print("prepare final ldd: forced to river and subcatchments")
+
+ldd_path = pcr.path(
+    ldd_map,
+    pcr.ifthenelse(gauges_map > 0, pcr.boolean(1), pcr.boolean(0))
+    )
+river_ldd_map = pcr.ifthen(ldd_path == 1, ldd_map)
+#reporter.report(ldd_path, "ldd_path")
+#reporter.report(river_ldd_map, "wflow_ldd_river")
+
+ldd_forced_map = pcr.ldd(pcr.ifthen(pcr.scalar(river_ldd_map) > 8, pcr.scalar(1)))
+
+# create a covered ldd. Note: we work from downstream to upstream!
+for catch in range(1,int(subcatchment_data.max())+1):
+    # create subcatch and gauge boolean maps
+    subcatch =  pcr.ifthen(subcatchment_map == catch, pcr.boolean(1))
+    gauge = pcr.ifthenelse(gauges_map == catch, pcr.boolean(1), pcr.boolean(0))
+    subcatch = pcr.ifthenelse(gauge, pcr.boolean(1), subcatch)
+
+    # select dem
+    dem_selec = pcr.ifthen(subcatch, ldd_dem_map)
+
+    # burn selected dem at gauge (so it gets forced to the river)
+    dem_selec = pcr.ifthenelse(gauge, dem_selec - 10000, dem_selec)
+
+    # create ldd for subcatchment with pit at gauge
+    ldd_selec = pcr.lddcreate(dem_selec, 1e35, 1e35, 1e35, 1e35)
+
+    # cover with existing ldd
+    ldd_forced_map = pcr.cover(ldd_forced_map,ldd_selec)
+
+# cover and report river ldd
+ldd_forced_map = pcr.cover(river_ldd_map, ldd_forced_map)
+reporter.report(ldd_forced_map, "wflow_ldd")
+
+# report laterals DEM
+ldd_laterals_map = pcr.ifthenelse(gauges_map > 0, pcr.ldd(5), ldd_forced_map)
+reporter.report(ldd_laterals_map, "wflow_ldd_laterals")
+
 
 # %% prepare wflow catchment
-print("prepare wflow_catchment")
-catchment_map = pcr.subcatchment(ldd_map, gauges_map)
-reporter.report(catchment_map, "wflow_subcatch")
+print("prepare final subcatchments: from final ldd")
+subcatchment_map = pcr.subcatchment(ldd_forced_map, gauges_map)
+reporter.report(subcatchment_map, "wflow_subcatch")
 
 """
 ----------------------------------------------------------------------------------------
@@ -389,8 +461,7 @@ SBM model parameters (vertical) from MetaSwap/IMOD
 
 # %% add rooting depth
 print("prepare rooting depth (from Metaswap)")
-rootingdepth_data = from_idf(
-    PROJECT_DIR / r"03.Bronbestanden\Sips\metaswap\wortelzonedikte.idf",
+rootingdepth_data = from_idf(wortelzone_idf,
     reporter.bounds
     )
 rootingdepth_data = rootingdepth_data * 10
@@ -399,7 +470,7 @@ reporter.report(rootingdepth_data, "rootingdepth")
 # %% add rooting depth
 print("prepare soilthickness (from IMOD)")
 layer_ident, soilthickness = get_thickness(
-    PROJECT_DIR / r"03.Bronbestanden\Sips\modellagen_25x25m",
+    modellagen_dir,
     reporter.bounds
     )
 
@@ -414,7 +485,7 @@ Groundwater parameters (horizontal) from MetaSwap/IMOD
 
 # %%
 print("prepare conductance (a.k.a. kd) (from IMOD)")
-conductance_data = get_conductance(PROJECT_DIR / r"03.Bronbestanden\Sips\kd-waarden",
+conductance_data = get_conductance(kd_waarden_dir,
                                    layer_ident,
                                    reporter.bounds)
 reporter.report(conductance_data, "conductance")
@@ -425,7 +496,7 @@ reporter.report(conductivity_data, "ksat")
 
 # %% 
 print("prepare conductance (from IMOD)")
-inf_conductance_data, exf_conductance_data = get_river_conductance(PROJECT_DIR / r"03.Bronbestanden\Sips\oppervlaktewater\winter",
+inf_conductance_data, exf_conductance_data = get_river_conductance(conductance_dir,
                                                                    layer_ident.shape,
                                                                    reporter.bounds)
 
@@ -434,7 +505,7 @@ reporter.report(exf_conductance_data, "exfiltration_conductance")
 
 # %%
 print("river bottom (from IMOD)")
-river_bottom_data = get_river_bottom(PROJECT_DIR / r"03.Bronbestanden\Sips\oppervlaktewater\winter",
+river_bottom_data = get_river_bottom(conductance_dir,
                                      dem_data,
                                      reporter.bounds)
 
@@ -447,5 +518,4 @@ reporter.report(np.full(dem_data.shape, 0.2)  , "specific_yield")
 
 # %% write netcdf
 print("write NetCDF")
-nc_file = PROJECT_DIR / "06.modelbouw_amerongerwetering/input/staticmaps.nc"
-reporter.write_netcdf(nc_file)
+reporter.write_netcdf(staticmaps_nc)
