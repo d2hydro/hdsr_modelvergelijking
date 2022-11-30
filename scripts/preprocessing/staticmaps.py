@@ -31,7 +31,8 @@ input_dem = PROJECT_DIR / "06.modelbouw_amerongerwetering/ahn_25m.tif"
 
 # input files for parameters
 SIPS_DIR = PROJECT_DIR / r"03.Bronbestanden\Sips"
-wortelzone_idf =  SIPS_DIR / "wortelzonedikte.idf"
+wortelzone_idf =  SIPS_DIR / r"metaswap/wortelzonedikte.idf"
+opp_stedelijk_idf = SIPS_DIR / r"metaswap/oppervlakte_stedelijkgebied.idf"
 modellagen_dir = SIPS_DIR / "modellagen_25x25m"
 kd_waarden_dir = SIPS_DIR / "kd-waarden"
 conductance_dir = SIPS_DIR / r"oppervlaktewater\winter"
@@ -293,9 +294,10 @@ DEM RELATED MODEL TOPOLOGY
 
 # %% get relevant properties from model DEM
 print("read model_dem")
-dem_source = rasterio.open(input_dem)
-profile = dem_source.profile
-
+with rasterio.open(input_dem) as dem_source:
+    profile = dem_source.profile
+    cell_size = dem_source.res[0]
+    dem_data = dem_source.read(1)
 
 # %% set reporter
 print("set_reporter")
@@ -309,8 +311,7 @@ reporter = Reporter(tif_dir=static_tifs,
 
 # %% write model_dem as WFlow_dem
 print("prepare wflow_dem")
-dem_data = dem_source.read(1)
-clipped_dem_data = clip_on_shape(dem_source.read(1), catchment_shape, dem_source.transform, NODATA)
+clipped_dem_data = clip_on_shape(dem_data, catchment_shape, profile["transform"], NODATA)
 reporter.report(dem_data, "wflow_dem")
 pcr.setclone(str(static_maps / "wflow_dem.map"))
 
@@ -385,9 +386,8 @@ reporter.report(outlet_map , "outlet")
 print("prepare initial ldd: to burned rivers and outlet")
 ldd_dem_data = np.where(river_data == 1, clipped_dem_data - BURN_DEPTH, clipped_dem_data)
 ldd_dem_data = np.where(gauges_data == 1, ldd_dem_data - BURN_DEPTH, ldd_dem_data)
+reporter.report(ldd_dem_data, "wflow_dem_burned")
 profile["dtype"] = ldd_dem_data.dtype
-with rasterio.open(static_tifs / "wflow_dem_burned.tif", "w", **profile) as dst:
-    dst.write(ldd_dem_data, 1)
 
 reporter.report(ldd_dem_data, "dem_burned")
 ldd_dem_map = array_to_map(ldd_dem_data, NODATA)
@@ -438,6 +438,9 @@ for catch in range(1,int(subcatchment_data.max())+1):
 
     # cover with existing ldd
     ldd_forced_map = pcr.cover(ldd_forced_map,ldd_selec)
+    if catch == 3:
+        reporter.report(dem_selec, "dem_at_4")
+        reporter.report(ldd_selec, "ldd_at_4")
 
 # cover and report river ldd
 ldd_forced_map = pcr.cover(river_ldd_map, ldd_forced_map)
@@ -466,6 +469,15 @@ rootingdepth_data = from_idf(wortelzone_idf,
     )
 rootingdepth_data = rootingdepth_data * 10
 reporter.report(rootingdepth_data, "rootingdepth")
+
+
+# %% add rooting depth
+print("prepare pathfrac")
+pathfrac_data = from_idf(opp_stedelijk_idf,
+    reporter.bounds
+    ) 
+pathfrac_data = pathfrac_data / cell_size **2
+reporter.report(pathfrac_data, "pathfrac")
 
 # %% add rooting depth
 print("prepare soilthickness (from IMOD)")
