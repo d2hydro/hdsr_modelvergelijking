@@ -36,6 +36,8 @@ opp_stedelijk_idf = SIPS_DIR / r"metaswap/oppervlakte_stedelijkgebied.idf"
 modellagen_dir = SIPS_DIR / "modellagen_25x25m"
 kd_waarden_dir = SIPS_DIR / "kd-waarden"
 conductance_dir = SIPS_DIR / r"oppervlaktewater\winter"
+leakage_dir = SIPS_DIR / r"kwel_wegzijging"
+leakage_pattern = "bdgflf_20010328_l{layer}.idf"
 
 # output dirs
 staticmaps_nc = PROJECT_DIR / "06.modelbouw_amerongerwetering/input/staticmaps.nc"
@@ -107,14 +109,14 @@ def from_raster(raster_file, bounds):
         data = temp_src.read(window=window)[0, :, :]
     return data
 
-
+# %%
 def from_idf(idf_file, bounds):
     temp_file = Path(TEMP_DIR.name) / "temp_file.tif"
     da = imod.idf.open(idf_file)
-    imod.rasterio.save(temp_file, da)
+    imod.rasterio.save(temp_file, da,pattern="{name}.tif")
     return from_raster(temp_file, bounds)
 
-
+# %%
 def get_thickness(model_layers, bounds):
     for idx, i in enumerate(MODEL_LAYERS):
         top = from_raster(model_layers / f"top_l{i}.asc", bounds)
@@ -146,6 +148,19 @@ def get_conductance(kd_layers, layer_ident, bounds):
             conductance
             )
     return conductance
+
+def get_leakage(leakage_layers, layer_ident, bounds, leakage_pattern=leakage_pattern):
+    leakage = np.full(layer_ident.shape, 0)
+    for i in MODEL_LAYERS:
+        leakage_file = leakage_layers / leakage_pattern.format(layer=i)
+        print(leakage_file)
+        layer_leakage = from_idf(leakage_file, bounds)
+        leakage = np.where(
+            layer_ident == i,
+            layer_leakage,
+            -leakage
+            )
+    return leakage
 
 def get_river_conductance(conductance_layers, shape, bounds):
     exf_conductance = np.full(shape, 0)
@@ -438,9 +453,6 @@ for catch in range(1,int(subcatchment_data.max())+1):
 
     # cover with existing ldd
     ldd_forced_map = pcr.cover(ldd_forced_map,ldd_selec)
-    if catch == 3:
-        reporter.report(dem_selec, "dem_at_4")
-        reporter.report(ldd_selec, "ldd_at_4")
 
 # cover and report river ldd
 ldd_forced_map = pcr.cover(river_ldd_map, ldd_forced_map)
@@ -523,10 +535,19 @@ river_bottom_data = get_river_bottom(conductance_dir,
 
 reporter.report(river_bottom_data, "river_bottom")
 
+# %%
+print("leakage (from IMOD)")
+leakage_data = get_leakage(leakage_dir, layer_ident, reporter.bounds)
+leakage_data = (leakage_data / (cell_size ** 2)) * 1000 # m3/day to mm/day
+leakage_data = np.where(leakage_data > 5, 5, leakage_data) # limit max to 5 mm/day
+leakage_data = np.where(leakage_data < -5, -5, leakage_data) # limit min to -5 mm/day
+reporter.report(leakage_data, "deeptransfer")
+
 # %% add missing layers in manual with defaults
 print("write defaults")
 
 reporter.report(np.full(dem_data.shape, 0.2)  , "specific_yield")
+reporter.report(np.full(dem_data.shape, 5), "maxleakage")
 
 # %% write netcdf
 print("write NetCDF")
