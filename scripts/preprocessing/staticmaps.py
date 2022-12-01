@@ -43,6 +43,7 @@ leakage_pattern = "bdgflf_20010328_l{layer}.idf"
 staticmaps_nc = PROJECT_DIR / "06.modelbouw_amerongerwetering/input/staticmaps.nc"
 static_tifs = PROJECT_DIR / "06.modelbouw_amerongerwetering/statictifs"
 static_maps = PROJECT_DIR / "06.modelbouw_amerongerwetering/staticmaps"
+static_idfs = PROJECT_DIR / "06.modelbouw_amerongerwetering/staticidfs"
 
 def clip_on_shape(data, shape, transform, nodata):
     nodata_mask = np.invert(rasterize((shape, 1),
@@ -227,6 +228,7 @@ def get_river_bottom(bottom_layers, dem, bounds):
 class Reporter:
     tif_dir: Path
     map_dir: Path
+    idf_dir: Path
     nodata: float
     transform: rasterio.Affine
     bounds: BoundingBox
@@ -259,6 +261,7 @@ class Reporter:
     def report(self, data, name):
         tif_file = self.tif_dir / f"{name}.tif"
         map_file = self.map_dir / f"{name}.map"
+        idf_file = self.idf_dir / f"{name}.idf"
         profile = dict(height=self.height,
                        width=self.width,
                        count=1,
@@ -284,6 +287,10 @@ class Reporter:
 
         # add to xr dataset
         self.add_to_ds(['y', 'x'], data, name)
+        
+        # write IDF
+        da = self.ds[name]
+        imod.idf.save(idf_file, da)
 
     def add_to_ds(self, dims, data, name):
         self.ds[name]=(dims, data)
@@ -318,6 +325,7 @@ with rasterio.open(input_dem) as dem_source:
 print("set_reporter")
 reporter = Reporter(tif_dir=static_tifs,
                     map_dir=static_maps,
+                    idf_dir=static_idfs,
                     width=profile["width"],
                     height=profile["height"],
                     transform=profile["transform"],
