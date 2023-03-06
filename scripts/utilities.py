@@ -161,11 +161,11 @@ def stack_rasters(ras_files: List, time_stamps: pd.Index, destination: rasterio.
         da (xr.DataArray): DataArray containing the stacked rasters
     """
     # Loop over files in ras_files list and extract and resample raster. Add to list
-    ras_data_list = []
+    ras_data_list = [None]*len(ras_files)
     for ix, ras_file in enumerate(tqdm(ras_files)):
         with rasterio.open(ras_file) as src:
             _, ras_data = raster_transform(source=src, destination=destination)
-            ras_data_list.append(ras_data)
+            ras_data_list[ix] = (ras_data)
 
     # Add the list of DataArrays to a single DataArray with a time dimension and inverse dimensions
     da = xr.concat(objs=ras_data_list, dim=time_stamps).transpose()
